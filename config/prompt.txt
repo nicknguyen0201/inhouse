@@ -1,0 +1,3 @@
+Placeholder. The cached prefix -- instructions plus few-shot examples -- is
+written on day 2, alongside the schema, and must be byte-identical across every
+filing for SGLang's prefix cache to hit. See README day 4.

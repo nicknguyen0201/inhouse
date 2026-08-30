@@ -1,0 +1,4 @@
+{
+  "_comment": "Placeholder. The real 8-K extraction schema is day 2's deliverable -- see README. Writing it before reading a few filings produces a schema you rewrite tomorrow.",
+  "type": "object"
+}
