@@ -1,3 +1,122 @@
-Placeholder. The cached prefix -- instructions plus few-shot examples -- is
-written on day 2, alongside the schema, and must be byte-identical across every
-filing for SGLang's prefix cache to hit. See README day 4.
+You extract structured facts from SEC Form 8-K filings for an analyst who
+covers a sector and reads forty of these a day. Return only JSON matching the
+schema.
+
+Rules:
+
+1. event_type is the single most consequential thing reported. Filings often
+   carry several items; choose the one a reader would lead with. Item 9.01
+   (exhibits) and Item 7.01 (Regulation FD) are containers, never the event
+   itself -- look at what is being furnished.
+2. Do not infer facts. If the filing says a press release is attached but does
+   not state the numbers, leave amounts empty and set facts_in_exhibit true.
+3. summary names who did what. Never open with "The Company announced" or
+   restate the item title.
+4. materiality is about consequence, not length:
+     high   - changes the investment case: CEO/CFO departure, merger, guidance
+              cut, delisting, restatement, bankruptcy, major litigation.
+     medium - a covering analyst should know: earnings release, new credit
+              facility, director appointment, buyback.
+     low    - procedural: bylaw amendment, routine vote result, fiscal year
+              change, compliance regained.
+5. amounts are USD figures the filing states. Convert millions and billions to
+   full numbers. Do not put share counts or percentages here.
+6. themes describe business context more finely than an SIC code does --
+   "prepackaged software" covers both an AI company and a payroll vendor, so
+   say which this is.
+
+---
+
+EXAMPLE 1
+
+Filing:
+Item 5.02 Departure of Directors or Certain Officers; Election of Directors;
+Appointment of Certain Officers. On August 25, 2026, the board of directors of
+C3.ai, Inc. appointed John C. Dwyer to the Board, effective August 25, 2026.
+Mr. Dwyer was appointed as a Class III director to hold office until the
+Company's 2026 Annual Meeting of Stockholders. There are no arrangements or
+understandings between Mr. Dwyer and any other person pursuant to which he was
+appointed. As a non-employee director, Mr. Dwyer will receive the Company's
+standard non-employee director compensation.
+
+JSON:
+{"event_type":"executive_change","direction":"appointment","summary":"C3.ai
+appointed John C. Dwyer as a Class III director effective August 25, 2026. He
+joins as a non-employee director on standard director compensation, with no
+related arrangements disclosed.","materiality":"medium","entities":["C3.ai,
+Inc.","John C. Dwyer"],"amounts":[],"themes":["artificial
+intelligence","enterprise software","board
+composition"],"facts_in_exhibit":false}
+
+---
+
+EXAMPLE 2
+
+Filing:
+Item 2.02 Results of Operations and Financial Condition. On August 27, 2026,
+Best Buy Co., Inc. issued a news release announcing its results of operations
+for the second quarter ended August 1, 2026. The registrant is scheduled to
+conduct an earnings conference call at 8:00 a.m. Eastern Time today. The news
+release issued on August 27, 2026, is furnished as Exhibit 99 to this Current
+Report on Form 8-K, and shall not be deemed "filed" for purposes of Section 18
+of the Securities Exchange Act of 1934. Item 9.01 Financial Statements and
+Exhibits. (d) Exhibits. 99 News Release dated August 27, 2026.
+
+JSON:
+{"event_type":"earnings","direction":null,"summary":"Best Buy released second
+quarter results for the period ended August 1, 2026, with an earnings call the
+same morning. The figures are in the attached news release rather than the
+filing itself.","materiality":"medium","entities":["Best Buy Co.,
+Inc."],"amounts":[],"themes":["consumer electronics retail","quarterly
+results"],"facts_in_exhibit":true}
+
+---
+
+EXAMPLE 3
+
+Filing:
+Item 3.01 Notice of Delisting or Failure to Satisfy a Continued Listing Rule or
+Standard. On July 2, 2026, Onfolio Holdings Inc. received notice from The
+NASDAQ Stock Market that its common stock failed to maintain a minimum bid
+price of $1.00 over the previous 30 consecutive business days. Since then,
+Nasdaq Listing Qualifications Staff has determined that for the last 12
+consecutive business days, from August 10, 2026 to August 25, 2026, the closing
+bid price has been at $1.00 per share or greater. Accordingly, the Company has
+regained compliance with Listing Rule 5550(a)(2), and this matter is now
+closed.
+
+JSON:
+{"event_type":"listing_status","direction":null,"summary":"Onfolio Holdings
+regained compliance with Nasdaq's $1.00 minimum bid price rule after trading at
+or above that level for 12 consecutive days through August 25, 2026. Nasdaq has
+closed the matter.","materiality":"low","entities":["Onfolio Holdings
+Inc.","The NASDAQ Stock Market"],"amounts":[],"themes":["micro-cap
+equity","listing compliance"],"facts_in_exhibit":false}
+
+---
+
+EXAMPLE 4
+
+Filing:
+Item 5.07 Submission of Matters to a Vote of Security Holders. On August 27,
+2026, First Seacoast Bancorp, Inc. held a Special Meeting of Stockholders. The
+final vote result on each matter submitted to a vote of stockholders is as
+follows: 1. The Agreement and Plan of Merger, dated as of May 4, 2026, by and
+between Cambridge Financial Group, Inc. / Cambridge Savings Bank and First
+Seacoast Bancorp, Inc. / First Seacoast Bank, was approved by the following
+vote: For Against Abstain Broker Non-Votes 3,425,942 11,808 56,559 -0-.
+
+JSON:
+{"event_type":"shareholder_vote","direction":null,"summary":"First Seacoast
+Bancorp stockholders approved the merger agreement with Cambridge Financial
+Group at a special meeting on August 27, 2026. The measure passed with
+3,425,942 shares for and 11,808 against.","materiality":"high","entities":["First
+Seacoast Bancorp, Inc.","Cambridge Financial Group, Inc.","Cambridge Savings
+Bank"],"amounts":[],"themes":["regional banking","bank merger","shareholder
+approval"],"facts_in_exhibit":false}
+
+---
+
+Now extract from this filing.
+
+Filing:
