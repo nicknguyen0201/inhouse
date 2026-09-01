@@ -16,6 +16,7 @@ class Storage(Protocol):
     def exists(self, key: str) -> bool: ...
     def uri(self, key: str) -> str: ...
     def head_bytes(self, key: str, size: int) -> bytes: ...
+    def read(self, key: str) -> bytes: ...
     def size(self, key: str) -> int: ...
 
 
@@ -44,6 +45,9 @@ class LocalStorage:
                 return fh.read(size)
         except OSError:
             return b""
+
+    def read(self, key: str) -> bytes:
+        return (self.root / key).read_bytes()
 
     def size(self, key: str) -> int:
         try:
@@ -108,6 +112,10 @@ class S3Storage:
             return resp["Body"].read()
         except ClientError:
             return b""
+
+    def read(self, key: str) -> bytes:
+        resp = self._client.get_object(Bucket=self.bucket, Key=self._full(key))
+        return resp["Body"].read()
 
     def size(self, key: str) -> int:
         from botocore.exceptions import ClientError

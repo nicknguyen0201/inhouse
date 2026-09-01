@@ -11,6 +11,7 @@ from .config import Config, ConfigError
 from .edgar import EdgarError
 from .index import IndexParseError
 from .ingest import ingest
+from .sglang_client import DEFAULT_URL as SGLANG_URL
 from .storage import open_storage
 
 
@@ -42,7 +43,73 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--storage", help="override STORAGE_URI, e.g. s3://bucket or ./data")
     ing.add_argument("-v", "--verbose", action="store_true", help="debug logging")
 
+    ext = sub.add_parser("extract", help="run a day's 8-Ks through the model")
+    ext.add_argument(
+        "--date", type=_parse_date, default="yesterday",
+        help="filing date, YYYY-MM-DD (default: yesterday)",
+    )
+    ext.add_argument("--limit", type=int, help="stop after N filings")
+    ext.add_argument("--storage", help="override STORAGE_URI")
+    ext.add_argument(
+        "--sglang-url", default=SGLANG_URL,
+        help=f"SGLang server URL (default: {SGLANG_URL})",
+    )
+    ext.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
     return parser
+
+
+def _run_extract(args, config) -> int:
+    from .extract import extract_day, load_schema, read_manifest, to_jsonl
+    from .sglang_client import SGLangClient
+
+    storage_uri = args.storage or config.storage_uri
+    storage = open_storage(storage_uri)
+    day = args.date
+
+    client = SGLangClient(args.sglang_url)
+    if not client.health():
+        print(
+            f"error: no SGLang server at {args.sglang_url}\n"
+            f"Start one with:\n"
+            f"  python -m sglang.launch_server --model-path Qwen/Qwen2.5-7B-Instruct-AWQ \\\n"
+            f"    --host 0.0.0.0 --port 30000 --mem-fraction-static 0.85",
+            file=sys.stderr,
+        )
+        return 2
+
+    mkey = f"manifest/{day:%Y-%m-%d}.jsonl"
+    if not storage.exists(mkey):
+        print(f"error: no manifest at {storage.uri(mkey)} -- run `ingest` first", file=sys.stderr)
+        return 2
+
+    rows = read_manifest(storage.read(mkey).decode("utf-8"))
+    print(f"extracting {len(rows)} 8-Ks from {day} via {args.sglang_url}")
+
+    model = client.model_path()
+    run = extract_day(
+        f"{day:%Y-%m-%d}", rows, lambda key: storage.read(key), client,
+        schema=load_schema(), model=model, limit=args.limit,
+    )
+
+    okey = f"extractions/{day:%Y-%m-%d}.jsonl"
+    storage.put(okey, to_jsonl(run).encode("utf-8"))
+
+    print()
+    print(f"  extracted {run.ok}")
+    print(f"  failed    {len(run.failures)}")
+    print(f"  model     {model}")
+    print(f"  output    {storage.uri(okey)}")
+    hit = client.cache_hit_rate()
+    if hit is not None:
+        print(f"  cache hit {hit:.1%}")
+    if run.results:
+        avg = sum(r.latency_s for r in run.results) / len(run.results)
+        print(f"  mean latency {avg:.2f}s")
+    for acc, err in run.failures[:5]:
+        print(f"    FAILED {acc}: {err}", file=sys.stderr)
+
+    return 1 if run.failures else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.command == "extract":
+        return _run_extract(args, config)
 
     day = args.date if isinstance(args.date, date) else _parse_date(args.date)
     storage_uri = args.storage or config.storage_uri
