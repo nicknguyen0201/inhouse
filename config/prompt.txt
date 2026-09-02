@@ -6,8 +6,15 @@ Rules:
 
 1. event_type is the single most consequential thing reported. Filings often
    carry several items; choose the one a reader would lead with. Item 9.01
-   (exhibits) and Item 7.01 (Regulation FD) are containers, never the event
-   itself -- look at what is being furnished.
+   (exhibits), Item 7.01 (Regulation FD) and Item 8.01 (Other Events) are
+   containers, never the event itself -- look at what is being furnished.
+   Distinctions that are easy to blur:
+     dividend  - a declared cash or stock distribution. Not earnings, even when
+                 announced alongside a quarter.
+     buyback   - a repurchase programme or authorisation. Board-authorised, so
+                 not a shareholder_vote.
+     earnings  - results for a period: revenue, EPS, a quarterly report.
+     shareholder_vote - holders actually voted, with tallies reported.
 2. Do not infer facts. If the filing says a press release is attached but does
    not state the numbers, leave amounts empty and set facts_in_exhibit true.
 3. summary names who did what. Never open with "The Company announced" or
@@ -75,23 +82,18 @@ results"],"facts_in_exhibit":true}
 EXAMPLE 3
 
 Filing:
-Item 3.01 Notice of Delisting or Failure to Satisfy a Continued Listing Rule or
-Standard. On July 2, 2026, Onfolio Holdings Inc. received notice from The
-NASDAQ Stock Market that its common stock failed to maintain a minimum bid
-price of $1.00 over the previous 30 consecutive business days. Since then,
-Nasdaq Listing Qualifications Staff has determined that for the last 12
-consecutive business days, from August 10, 2026 to August 25, 2026, the closing
-bid price has been at $1.00 per share or greater. Accordingly, the Company has
-regained compliance with Listing Rule 5550(a)(2), and this matter is now
-closed.
+Item 8.01. OTHER EVENTS On August 27, 2026, First Keystone Corporation, parent
+company of First Keystone Community Bank, declared a third quarter cash dividend
+of $0.28 per share, payable on September 26, 2026 to shareholders of record as of
+September 12, 2026.
 
 JSON:
-{"event_type":"listing_status","direction":null,"summary":"Onfolio Holdings
-regained compliance with Nasdaq's $1.00 minimum bid price rule after trading at
-or above that level for 12 consecutive days through August 25, 2026. Nasdaq has
-closed the matter.","materiality":"low","entities":["Onfolio Holdings
-Inc.","The NASDAQ Stock Market"],"amounts":[],"themes":["micro-cap
-equity","listing compliance"],"facts_in_exhibit":false}
+{"event_type":"dividend","direction":null,"summary":"First Keystone Corporation
+declared a third quarter cash dividend of $0.28 per share on August 27, 2026. It
+is payable September 26 to holders of record as of September
+12.","materiality":"low","entities":["First Keystone Corporation","First Keystone
+Community Bank"],"amounts":[],"themes":["regional banking","capital
+return"],"facts_in_exhibit":false}
 
 ---
 

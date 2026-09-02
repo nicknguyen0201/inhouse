@@ -3,15 +3,24 @@
   "title": "8-K extraction",
   "type": "object",
   "additionalProperties": false,
-  "required": ["event_type", "summary", "materiality", "entities", "amounts", "themes"],
+  "required": [
+    "event_type",
+    "summary",
+    "materiality",
+    "entities",
+    "amounts",
+    "themes"
+  ],
   "properties": {
     "event_type": {
-      "description": "The single most consequential thing this filing reports. If several, choose the one a reader would lead with.",
+      "description": "The single most consequential thing this filing reports. If several, choose the one a reader would lead with. A dividend or buyback is a capital return, not earnings.",
       "type": "string",
       "enum": [
         "executive_change",
         "agreement",
         "earnings",
+        "dividend",
+        "buyback",
         "guidance",
         "acquisition",
         "financing",
@@ -19,6 +28,7 @@
         "shareholder_vote",
         "listing_status",
         "governance_change",
+        "litigation",
         "legal_or_regulatory",
         "restructuring",
         "auditor_change",
@@ -29,8 +39,16 @@
     },
     "direction": {
       "description": "For an executive_change, whether the person is arriving or leaving. Null for every other event_type.",
-      "type": ["string", "null"],
-      "enum": ["departure", "appointment", "both", null]
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "departure",
+        "appointment",
+        "both",
+        null
+      ]
     },
     "summary": {
       "description": "Two sentences, plain language, naming who did what. No boilerplate, no 'the Company announced that'.",
@@ -41,13 +59,21 @@
     "materiality": {
       "description": "high = likely to move the stock or change the investment case. medium = a reader covering this name should know. low = procedural or administrative.",
       "type": "string",
-      "enum": ["high", "medium", "low"]
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
     },
     "entities": {
       "description": "People and organisations named as parties to the event. Not the filer's own lawyers, auditors, or transfer agent.",
       "type": "array",
       "maxItems": 8,
-      "items": {"type": "string", "minLength": 2, "maxLength": 120}
+      "items": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 120
+      }
     },
     "amounts": {
       "description": "Monetary figures stated in the filing. Convert to USD. Omit share counts and percentages; leave empty if the filing states no figure.",
@@ -56,10 +82,19 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["label", "value_usd"],
+        "required": [
+          "label",
+          "value_usd"
+        ],
         "properties": {
-          "label": {"type": "string", "minLength": 2, "maxLength": 80},
-          "value_usd": {"type": "number"}
+          "label": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "value_usd": {
+            "type": "number"
+          }
         }
       }
     },
@@ -68,7 +103,11 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 5,
-      "items": {"type": "string", "minLength": 3, "maxLength": 40}
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 40
+      }
     },
     "facts_in_exhibit": {
       "description": "True when the filing's substance is in an attached exhibit rather than the filing body -- e.g. 'the press release is furnished as Exhibit 99.1'.",
