@@ -1,0 +1,113 @@
+name: ci
+
+# Fast, deterministic, no credentials. The whole pipeline is testable without a
+# GPU, a database or a network -- the model call sits behind a Client protocol
+# and storage behind a Storage protocol, so 102 tests run in under two seconds.
+# That property is the point of the architecture, and this workflow proves it on
+# every push rather than asserting it in a README.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor the project claims to support; 3.13 is what the
+        # deployment actually runs. Both are tested because "works on my
+        # machine" is the failure this catches.
+        python: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+  # The schema is executable, so it gets executed. A syntax error or a bad
+  # constraint should fail here, not the first time someone runs a migration
+  # against a live database.
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: inhouse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply schema
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d inhouse -v ON_ERROR_STOP=1 -f sql/schema.sql
+
+      - name: Apply schema again
+        # Every DDL statement is guarded, so a second run must be a no-op. This
+        # is what lets `load --schema` be safe to pass on any invocation.
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d inhouse -v ON_ERROR_STOP=1 -f sql/schema.sql
+
+      - name: Apply migrations in order
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in sql/migrations/*.sql; do
+            [ -e "$f" ] || continue
+            echo "→ $f"
+            psql -h localhost -U postgres -d inhouse -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Verify the objects the dashboard depends on
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d inhouse -v ON_ERROR_STOP=1 -c "
+            SELECT 1/count(*) FROM information_schema.views
+             WHERE table_name IN ('daily_dashboard','filing_sectors');
+            SELECT * FROM daily_dashboard LIMIT 0;
+            SELECT 1/count(*) FROM sic_sectors;"
+
+  # The prompt is the cached prefix: byte-identical across every request, and
+  # ~1,400 tokens of the ~2,100-token median prompt. If it drifts from the
+  # schema the model is asked for fields that cannot be stored, and if the
+  # examples stop validating the few-shot teaching is wrong. Both fail silently
+  # at runtime, so they are checked here.
+  prompt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+      - name: Few-shot examples validate against the schema
+        run: pytest -q tests/test_extract.py -k "schema or few_shot or prefix"

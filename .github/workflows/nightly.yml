@@ -1,0 +1,204 @@
+name: nightly
+
+# The pipeline, once a night.
+#
+# The ordering below is the whole cost argument. A g4dn.xlarge is $0.53/hour and
+# the model is needed for roughly twenty minutes of a ninety-minute run, so the
+# GPU is started as late as possible and stopped as early as possible:
+#
+#   ingest   ~60 min   GPU stopped   (rate-limited at 8 req/s by the SEC)
+#   extract  ~22 min   GPU RUNNING
+#   load      ~2 min   GPU stopped
+#
+# That is ~$0.20 a night. Leaving the instance up for the whole workflow would
+# be ~$0.80, and leaving it up permanently ~$380/month. The instance is stopped
+# in an `always()` step so a failure anywhere still turns the meter off.
+#
+# Credentials are OIDC, not stored keys: GitHub mints a short-lived token
+# proving which repo and branch is running, and AWS exchanges it for temporary
+# credentials. Nothing long-lived exists to leak.
+
+on:
+  schedule:
+    # 22:05 UTC = 6:05pm ET during daylight saving. Filings land after market
+    # close and EDGAR publishes the daily index shortly after; the five minutes
+    # are slack for that. GitHub's scheduler is best-effort and can run late,
+    # which a nightly batch tolerates.
+    - cron: "5 22 * * 2-6"   # Tue-Sat UTC covers Mon-Fri filing days ET
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Filing date (YYYY-MM-DD), or blank for yesterday"
+        required: false
+        default: ""
+      skip_extract:
+        description: "Ingest and load only -- never starts the GPU"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never two nights at once: they would fight over the same instance and the
+  # same S3 keys. Queue rather than cancel, so a running job still gets to its
+  # stop-instance step.
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  id-token: write      # required to mint the OIDC token
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  INSTANCE_ID: ${{ vars.GPU_INSTANCE_ID }}
+  STORAGE_URI: ${{ vars.STORAGE_URI }}
+
+jobs:
+  ingest:
+    name: Fetch filings to S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      date: ${{ steps.day.outputs.date }}
+      filings: ${{ steps.run.outputs.filings }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e .
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: day
+        name: Resolve the filing date
+        run: |
+          DATE="${{ inputs.date }}"
+          [ -n "$DATE" ] || DATE=$(date -u -d 'yesterday' +%F)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "### Filing date \`$DATE\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - id: run
+        name: Ingest
+        env:
+          # The SEC blocks traffic without real contact details, and rate-limits
+          # at 10 req/s. The client paces at 8.
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          set -o pipefail
+          python -m inhouse ingest --date "${{ steps.day.outputs.date }}" | tee out.txt
+          echo "filings=$(grep -oE 'manifest .* \(([0-9]+) rows' out.txt | grep -oE '[0-9]+ rows' | grep -oE '[0-9]+')" >> "$GITHUB_OUTPUT"
+          { echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  extract:
+    name: Extract on the GPU
+    needs: ingest
+    if: ${{ !inputs.skip_extract }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e .
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Start the instance
+        run: |
+          aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+                 --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "GPU_IP=$IP" >> "$GITHUB_ENV"
+          echo "Instance running at $IP"
+
+      - name: Open a tunnel to SGLang
+        # Port 30000 is never exposed to the internet -- the security group
+        # allows SSH only, and the server is reached through a forwarded port.
+        # SGLang has no authentication, so an open port would be a free GPU for
+        # whoever found it.
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.GPU_SSH_KEY }}" > ~/.ssh/gpu.pem
+          chmod 600 ~/.ssh/gpu.pem
+          ssh-keyscan -H "$GPU_IP" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -f -N -i ~/.ssh/gpu.pem -L 30000:localhost:30000 \
+              -o ServerAliveInterval=30 ubuntu@"$GPU_IP"
+
+      - name: Wait for the model to load
+        # Boot plus a 5GB model load is two to three minutes, which is nothing
+        # for a batch job but far longer than a default HTTP timeout.
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf localhost:30000/health >/dev/null; then
+              echo "SGLang ready after ${i}0s"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::SGLang did not become healthy within 10 minutes"
+          exit 1
+
+      - name: Extract
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          set -o pipefail
+          # Concurrency 32 is the measured knee: 135 docs/hr sequential, 380 at
+          # 32, and 381 at 64 -- past 32 the T4 is memory-bandwidth-bound and
+          # extra requests only queue.
+          python -m inhouse extract \
+            --date "${{ needs.ingest.outputs.date }}" \
+            --concurrency 32 | tee out.txt
+          { echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop the instance
+        # always(): a failed extraction must not leave a $0.53/hour instance
+        # running until someone notices.
+        if: always()
+        run: |
+          aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
+          echo "Instance stopping — meter off."
+
+  load:
+    name: Load to Postgres
+    needs: [ingest, extract]
+    # Runs even when extraction failed or was skipped: filings and insider
+    # transactions are useful on their own, and a partial night beats none.
+    if: ${{ always() && needs.ingest.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e .
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Load
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -o pipefail
+          # Idempotent by construction: filings and extractions upsert on their
+          # keys, insider transactions on (accession, txn_index). Re-running a
+          # night corrects it rather than duplicating it.
+          python -m inhouse load --date "${{ needs.ingest.outputs.date }}" --show 10 | tee out.txt
+          { echo "### Loaded"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

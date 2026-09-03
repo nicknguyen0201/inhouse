@@ -67,6 +67,11 @@ class Transaction:
     shares_owned_after: float | None
     direct_ownership: bool | None      # D direct / I indirect
     derivative: bool = False
+    # Position in the filing's transaction list, in document order. The SEC
+    # assigns no transaction id, so this is the only thing distinguishing two
+    # otherwise identical rows -- a sale split across lots at one price on one
+    # day is a real filing pattern.
+    index: int = 0
     footnotes: list[str] = field(default_factory=list)
 
     @property
@@ -228,6 +233,9 @@ def parse_form4(raw: bytes | str, *, accession: str = "") -> Form4:
     )
 
     transactions: list[Transaction] = []
+    # One counter across both tables: the raw document never changes, so
+    # document order is stable and re-parsing yields the same indices.
+    position = 0
     for tag, derivative in (
         ("nonDerivativeTransaction", False),
         ("derivativeTransaction", True),
@@ -251,9 +259,11 @@ def parse_form4(raw: bytes | str, *, accession: str = "") -> Form4:
                     shares_owned_after=_number(post, "sharesOwnedFollowingTransaction"),
                     direct_ownership=(direct == "D") if direct else None,
                     derivative=derivative,
+                    index=position,
                     footnotes=[footnotes[i] for i in _footnote_ids(node) if i in footnotes],
                 )
             )
+            position += 1
 
     holdings = sum(
         1
