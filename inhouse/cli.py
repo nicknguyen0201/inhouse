@@ -54,7 +54,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--sglang-url", default=SGLANG_URL,
         help=f"SGLang server URL (default: {SGLANG_URL})",
     )
+    ext.add_argument(
+        "--concurrency", type=int, default=1,
+        help="requests in flight (default 1 = sequential)",
+    )
+    ext.add_argument(
+        "--sweep", metavar="N,N,...",
+        help="sweep concurrency levels and report docs/hour, e.g. 8,16,32,64",
+    )
+    ext.add_argument(
+        "--no-flush", action="store_true",
+        help="do not clear SGLang's prefix cache between sweep levels (levels "
+             "then differ in cache warmth, so results are not comparable)",
+    )
     ext.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
+    ld = sub.add_parser("load", help="load a day into Postgres")
+    ld.add_argument(
+        "--date", type=_parse_date, default="yesterday",
+        help="filing date, YYYY-MM-DD (default: yesterday)",
+    )
+    ld.add_argument("--storage", help="override STORAGE_URI")
+    ld.add_argument("--dsn", help="Postgres DSN (default: $DATABASE_URL)")
+    ld.add_argument(
+        "--schema", action="store_true",
+        help="apply sql/schema.sql before loading",
+    )
+    ld.add_argument(
+        "--show", type=int, metavar="N",
+        help="print the top N dashboard rows after loading",
+    )
+    ld.add_argument("-v", "--verbose", action="store_true", help="debug logging")
 
     return parser
 
@@ -87,6 +117,10 @@ def _run_extract(args, config) -> int:
     print(f"extracting {len(rows)} 8-Ks from {day} via {args.sglang_url}")
 
     model = client.model_path()
+
+    if args.sweep or args.concurrency > 1:
+        return _run_extract_async(args, storage, rows, day, model, mkey)
+
     run = extract_day(
         f"{day:%Y-%m-%d}", rows, lambda key: storage.read(key), client,
         schema=load_schema(), model=model, limit=args.limit,
@@ -112,6 +146,103 @@ def _run_extract(args, config) -> int:
     return 1 if run.failures else 0
 
 
+def _run_extract_async(args, storage, rows, day, model, mkey) -> int:
+    """Concurrent path: many requests in flight, optionally swept."""
+    import asyncio
+
+    from .batch import AsyncSGLangClient, extract_day_async, sweep
+    from .extract import load_schema, to_jsonl
+
+    schema = load_schema()
+    client = AsyncSGLangClient(args.sglang_url)
+    load = lambda key: storage.read(key)
+
+    if args.limit is not None:
+        rows = rows[: args.limit]
+
+    if args.sweep:
+        levels = tuple(int(x) for x in args.sweep.split(","))
+        print(f"sweeping concurrency {levels} over {len(rows)} filings\n")
+        results = asyncio.run(
+            sweep(f"{day:%Y-%m-%d}", rows, load, client, schema,
+                  levels=levels, model=model, flush=not args.no_flush)
+        )
+        print()
+        for stats in results:
+            print(stats.line())
+        best = max(results, key=lambda s: s.docs_per_hour)
+        print(f"\n  best: concurrency {best.concurrency} at {best.docs_per_hour:.0f} docs/hour")
+        return 0
+
+    run, stats = asyncio.run(
+        extract_day_async(f"{day:%Y-%m-%d}", rows, load, client, schema,
+                          concurrency=args.concurrency, model=model)
+    )
+    okey = f"extractions/{day:%Y-%m-%d}.jsonl"
+    storage.put(okey, to_jsonl(run).encode("utf-8"))
+
+    print()
+    print(f"  extracted {run.ok}")
+    print(f"  failed    {len(run.failures)}")
+    print(f"  model     {model}")
+    print(f"  output    {storage.uri(okey)}")
+    print(stats.line())
+    for acc, err in run.failures[:5]:
+        print(f"    FAILED {acc}: {err}", file=sys.stderr)
+    return 1 if run.failures else 0
+
+
+def _run_load(args, config) -> int:
+    import os
+
+    from .db import apply_schema, connect, dashboard_rows, load_day
+
+    dsn = args.dsn or os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        print(
+            "error: no database DSN. Set DATABASE_URL in .env or pass --dsn, e.g.\n"
+            "  DATABASE_URL=postgresql://user:pass@host:5432/inhouse",
+            file=sys.stderr,
+        )
+        return 2
+
+    storage = open_storage(args.storage or config.storage_uri)
+    day = args.date
+
+    mkey = f"manifest/{day:%Y-%m-%d}.jsonl"
+    if not storage.exists(mkey):
+        print(f"error: no manifest at {storage.uri(mkey)} -- run `ingest` first", file=sys.stderr)
+        return 2
+    manifest = storage.read(mkey).decode("utf-8")
+
+    ekey = f"extractions/{day:%Y-%m-%d}.jsonl"
+    extractions = storage.read(ekey).decode("utf-8") if storage.exists(ekey) else ""
+    if not extractions:
+        print(f"note: no extractions at {storage.uri(ekey)} -- loading filings only")
+
+    conn = connect(dsn)
+    try:
+        if args.schema:
+            apply_schema(conn)
+            print("  schema applied")
+        counts = load_day(conn, manifest, extractions, lambda k: storage.read(k))
+        print(f"  loaded {counts}")
+
+        if args.show:
+            rows = dashboard_rows(conn, f"{day:%Y-%m-%d}")
+            print(f"\n  {len(rows)} dashboard rows for {day}\n")
+            for r in rows[: args.show]:
+                company, sic, _sicd, event, mat, summary = r[0], r[1], r[2], r[3], r[4], r[5]
+                print(f"  {company[:38]:<40} SIC {sic or '----'}  [{mat.upper()}] {event}")
+                print(f"      {summary[:110]}")
+                if r[6]:
+                    print(f"      Form 4 -- {r[6]} ({r[7] or 'insider'}) "
+                          f"{r[8]} {r[9]:,.0f} shares on {r[11]}")
+    finally:
+        conn.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -131,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "extract":
         return _run_extract(args, config)
+    if args.command == "load":
+        return _run_load(args, config)
 
     day = args.date if isinstance(args.date, date) else _parse_date(args.date)
     storage_uri = args.storage or config.storage_uri

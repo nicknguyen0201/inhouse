@@ -31,10 +31,15 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 DEFAULT_SCHEMA = CONFIG_DIR / "schema.json"
 DEFAULT_PROMPT = CONFIG_DIR / "prompt.txt"
 
-# Leaves room for the model's own output within a 7B's context while staying
-# well clear of the T4's KV cache budget. p90 of the corpus is ~9k characters,
-# so this truncates only a handful of filings per day.
-MAX_DOCUMENT_CHARS = 24_000
+# Above the longest 8-K in the corpus (35,309 chars on 2026-08-27), so nothing
+# truncates in practice -- the cap exists to bound memory against an outlier,
+# not to trim normal filings. Measured at concurrency 32, KV cache peaked at 38%
+# of a T4's budget, so the headroom is real.
+#
+# Raising it is not free: a long sequence holds KV cache proportional to its
+# length, crowding out concurrent ones. Lower it if throughput matters more than
+# the tail of very long filings.
+MAX_DOCUMENT_CHARS = 40_000
 
 
 class ExtractionError(Exception):
