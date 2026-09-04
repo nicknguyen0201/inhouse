@@ -35,6 +35,11 @@ $380/month.
 
 ### Credentials: OIDC, not stored keys
 
+> Placeholders below (`<ACCOUNT_ID>`, `<BUCKET>`, `<INSTANCE_ID>`) are yours to
+> fill in. They are not secrets, but they are reconnaissance -- an account id
+> and a bucket name are where someone probing for misconfigurations starts, and
+> the documentation reads the same without them.
+
 The workflow assumes an IAM role using a token GitHub mints per run. Nothing
 long-lived is stored, and the trust policy pins the role to this repository, so
 a leaked workflow file grants nobody anything.
@@ -56,7 +61,7 @@ Audience:      sts.amazonaws.com
   "Statement": [{
     "Effect": "Allow",
     "Principal": {
-      "Federated": "arn:aws:iam::401418592700:oidc-provider/token.actions.githubusercontent.com"
+      "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
     },
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
@@ -64,7 +69,7 @@ Audience:      sts.amazonaws.com
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
       },
       "StringLike": {
-        "token.actions.githubusercontent.com:sub": "repo:nicknguyen0201/inhouse:*"
+        "token.actions.githubusercontent.com:sub": "repo:<OWNER>/<REPO>:*"
       }
     }
   }]
@@ -84,14 +89,14 @@ in the world could assume this role.
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
       "Resource": [
-        "arn:aws:s3:::inhouse-edgar",
-        "arn:aws:s3:::inhouse-edgar/*"
+        "arn:aws:s3:::<BUCKET>",
+        "arn:aws:s3:::<BUCKET>/*"
       ]
     },
     {
       "Effect": "Allow",
       "Action": ["ec2:StartInstances", "ec2:StopInstances"],
-      "Resource": "arn:aws:ec2:us-east-2:401418592700:instance/i-02d5b786e9fe18e25"
+      "Resource": "arn:aws:ec2:us-east-2:<ACCOUNT_ID>:instance/<INSTANCE_ID>"
     },
     {
       "Effect": "Allow",
@@ -113,9 +118,9 @@ Settings → Secrets and variables → Actions.
 
 | name | example |
 |---|---|
-| `AWS_ROLE_ARN` | `arn:aws:iam::401418592700:role/inhouse-github-actions` |
-| `GPU_INSTANCE_ID` | `i-02d5b786e9fe18e25` |
-| `STORAGE_URI` | `s3://inhouse-edgar` |
+| `AWS_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/inhouse-github-actions` |
+| `GPU_INSTANCE_ID` | `<INSTANCE_ID>` |
+| `STORAGE_URI` | `s3://<BUCKET>` |
 
 **Secrets:**
 
@@ -125,10 +130,13 @@ Settings → Secrets and variables → Actions.
 | `GPU_SSH_KEY` | contents of the `.pem`, for the tunnel |
 | `DATABASE_URL` | Supabase transaction pooler string |
 
-### The instance must autostart SGLang
+### What runs on the instance
 
-The workflow starts the instance and waits for `/health`; it does not install or
-launch anything. Put this on the box so the server comes up on boot:
+Two systemd units. The workflow starts the box and polls S3 — it never SSHes,
+because a GitHub runner has no stable address and SGLang has no authentication,
+so admitting one would mean opening port 22 to everyone.
+
+**1. `sglang.service`** — the inference server, up on every boot.
 
 ```ini
 # /etc/systemd/system/sglang.service
@@ -138,6 +146,12 @@ After=network-online.target
 
 [Service]
 User=ubuntu
+# systemd starts with a nearly empty environment. An interactive shell picks
+# these up from the login profile, which is why launching by hand worked and
+# the service did not: SGLang JIT-compiles a flashinfer kernel on the first
+# forward pass and needs nvcc on PATH plus CUDA_HOME to find the toolkit.
+Environment=CUDA_HOME=/opt/pytorch/cuda
+Environment=PATH=/opt/pytorch/cuda/bin:/opt/pytorch/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LIBRARY_PATH=/opt/pytorch/lib/python3.13/site-packages/nvidia/cu13/lib:/opt/pytorch/cuda/lib
 Environment=LD_LIBRARY_PATH=/opt/pytorch/lib/python3.13/site-packages/nvidia/cu13/lib:/opt/pytorch/cuda/lib
 ExecStart=/opt/pytorch/bin/python -m sglang.launch_server \
@@ -145,21 +159,76 @@ ExecStart=/opt/pytorch/bin/python -m sglang.launch_server \
   --host 0.0.0.0 --port 30000 \
   --mem-fraction-static 0.75 \
   --attention-backend triton \
-  --cuda-graph-max-bs 32 \
   --enable-metrics
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-```bash
-sudo systemctl enable --now sglang
-```
-
-`--mem-fraction-static 0.75` rather than the 0.85 in most examples: at 0.85 the
+`--mem-fraction-static 0.75` rather than the 0.85 most examples use: at 0.85 the
 grammar-constraint kernel had no room to load and the server died on the first
 schema-constrained request, several minutes after appearing healthy.
+
+**2. `nightly-extract.service`** — the job, which powers the machine off when
+done. `Type=oneshot` so systemd knows it is a task rather than a daemon.
+
+```ini
+# /etc/systemd/system/nightly-extract.service
+[Unit]
+Description=Nightly 8-K extraction
+After=network-online.target sglang.service
+Wants=sglang.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=STORAGE_URI=s3://<BUCKET>
+Environment=REPO_DIR=/home/ubuntu/inhouse
+ExecStart=/home/ubuntu/inhouse/scripts/nightly-extract.sh
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Install both:
+
+```bash
+git clone https://github.com/<OWNER>/<REPO>.git ~/inhouse
+/opt/pytorch/bin/pip install -e ~/inhouse
+sudo systemctl daemon-reload
+sudo systemctl enable --now sglang
+sudo systemctl enable nightly-extract     # enable, not start: it runs at boot
+```
+
+The instance also needs an IAM instance profile with S3 read/write on the
+bucket — it fetches filings and writes extractions itself now.
+
+**Verify by rebooting.** "It started when I ran systemctl" and "it starts on
+boot" are different claims, and only the second is what the workflow depends on:
+
+```bash
+sudo reboot
+# wait ~4 minutes
+curl -s localhost:30000/health && echo " READY"
+```
+
+### How the workflow and the instance communicate
+
+There is no shell session between them, so they pass messages through S3 and
+instance tags:
+
+| | |
+|---|---|
+| workflow → instance | an `ExtractDate` tag, set before `start-instances` |
+| instance → workflow | `logs/extract-<date>.done`, a JSON marker with the exit status |
+| instance → operator | `logs/extract-<date>.log`, uploaded before shutdown |
+
+The workflow deletes the marker before starting, then polls for it. Without
+that deletion a stale marker from the previous night would make the job return
+immediately with yesterday's result.
 
 ### Running it by hand
 
