@@ -62,7 +62,9 @@ def build(conn, out: Path, days_limit: int = 5) -> int:
 
     with conn.cursor() as cur:
         cur.execute(DAYS_SQL)
-        all_days = [r[0] for r in cur.fetchall()]
+        # (date, extraction count) -- the count is shown beside each edition so
+        # a thin day reads as thin rather than as a quiet news day.
+        all_days = cur.fetchall()
 
     if not all_days:
         print("no filings in the database — nothing to build", file=sys.stderr)
@@ -72,7 +74,7 @@ def build(conn, out: Path, days_limit: int = 5) -> int:
     # last March from a dropdown.
     days = all_days[:days_limit]
 
-    for day in days:
+    for day, _count in days:
         with conn.cursor() as cur:
             cur.execute(SECTORS_SQL, (day,))
             sectors = cur.fetchall()
@@ -103,7 +105,7 @@ def build(conn, out: Path, days_limit: int = 5) -> int:
             written += 1
 
     # The newest day, unfiltered, is the front page.
-    shutil.copy(out / page_name(days[0], "", ""), out / "index.html")
+    shutil.copy(out / page_name(days[0][0], "", ""), out / "index.html")
     written += 1
 
     # Tell Pages not to run Jekyll over this -- it would otherwise ignore any

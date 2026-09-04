@@ -42,20 +42,19 @@ ORDER BY
     d.company
 """
 
-# Days worth offering, not days that exist.
+# Days that have been extracted, with how much is on each.
 #
-# `filings` gains rows the moment a day is ingested, but a day with no
-# extractions renders an empty page -- and a partial one (a handful of filings
-# from an interrupted run) renders a page that looks like a quiet news day when
-# it is really a broken pipeline. The threshold filters both without hiding a
-# genuinely thin Friday.
+# The join to `extractions` is the filter: `filings` gains rows the moment a day
+# is ingested, and a day that was fetched but never extracted renders an empty
+# page. Beyond that, no threshold -- an earlier version dropped days below a
+# fraction of the median, which was arithmetic in place of a label. Showing the
+# count says the same thing without deciding for the reader.
 DAYS_SQL = """
-SELECT f.filed_at::date AS day
+SELECT f.filed_at::date AS day, count(*) AS n
 FROM filings f
 JOIN extractions e ON e.accession = f.accession
 WHERE f.form_type = '8-K'
 GROUP BY 1
-HAVING count(*) >= 10
 ORDER BY 1 DESC
 LIMIT 30
 """
@@ -134,13 +133,14 @@ button:hover { background:transparent; color:var(--ink); }
           margin-bottom:5px; }
 .navrow:last-child { margin-bottom:0; }
 .navlabel { color:var(--dim); min-width:74px; }
-.current-day { font-weight:600; }
-.navsep { color:var(--dim); font-size:12px; margin-left:4px; }
 .nav-link { color:var(--dim); text-decoration:none; font-size:14px;
             border-bottom:1px solid transparent; }
 .nav-link:hover { color:var(--ink); border-bottom-color:var(--rule); }
 .nav-link.active { color:var(--ink); font-weight:600;
                    border-bottom:1px solid var(--ink); }
+.nav-select { font:inherit; font-size:14px; padding:3px 6px; border:0;
+              border-bottom:1px solid var(--ink); background:transparent;
+              color:var(--ink); border-radius:0; max-width:260px; }
 main { max-width:760px; margin:0 auto; padding:22px 24px 70px; }
 .count { color:var(--dim); padding-bottom:10px; margin-bottom:6px;
          border-bottom:1px solid var(--rule); }
@@ -330,8 +330,8 @@ def _filters(day, days, sectors, sector, materiality, static: bool = False) -> s
         return _static_filters(day, days, sectors, sector, materiality)
 
     day_opts = "".join(
-        f"<option value='{d}'{' selected' if d == day else ''}>{d}</option>"
-        for d in days
+        f"<option value='{d}'{' selected' if d == day else ''}>{d} ({n})</option>"
+        for d, n in days
     )
     sec_opts = "<option value=''>All sectors</option>" + "".join(
         f"<option value='{escape(s)}'{' selected' if s == sector else ''}>"
@@ -361,19 +361,24 @@ def _static_filters(day, days, sectors, sector, materiality) -> str:
 
     rows = []
 
-    # A single day needs no picker -- two links reading "Aug 27 Aug 26" look
-    # like navigation of some other kind. With several, the current day is
-    # stated and the others are offered as alternatives.
+    # Every day on one row, current one marked -- the same shape as the Section
+    # and Materiality rows below it. The previous version stated the current day
+    # as a sentence and hung "Earlier:" off it, which read as prose rather than
+    # as a control and did not match the two rows underneath.
     if len(days) > 1:
-        others = [
-            link(f"{d:%a %-d %b}", d, "", "", False) for d in days if d != day
+        items = [
+            link(f"{d:%-d %b} ({n})", d, "", "", d == day) for d, n in days
         ]
         rows.append(
-            "<div class=navrow><span class='navlabel rubric'>Edition</span>"
-            f"<span class=current-day>{day:%A %-d %B}</span>"
-            "<span class=navsep>Earlier:</span>" + "".join(others) + "</div>"
+            "<div class='navrow' data-collapsible='Edition'>"
+            "<span class='navlabel rubric'>Edition</span>"
+            + "".join(items) + "</div>"
         )
 
+    # A list, not a dropdown. Sectors are a bounded set -- 26 in the hierarchy,
+    # around 22 present on a given day -- so this row does not grow the way
+    # editions do, and the counts beside each are worth seeing at a glance
+    # rather than hidden behind a control that has to be opened.
     items = [link("All", day, "", materiality, not sector)]
     items += [
         link(f"{s} ({n})", day, s, "", s == sector)
@@ -394,13 +399,50 @@ def _static_filters(day, days, sectors, sector, materiality) -> str:
         + "".join(items) + "</div>"
     )
 
-    return "<nav class=filters>" + "".join(rows) + "</nav>"
+    return "<nav class=filters>" + "".join(rows) + "</nav>" + COLLAPSE_JS
 
 
 # Phrases that change what a transaction means. Matched on the footnote text
 # because the structured <aff10b5One> flag is set by some filers and not others.
 SCHEDULED = ("10b5-1", "10b5‑1")
 AVERAGED = ("weighted average",)
+
+
+# Progressive enhancement. Each marked row ships as links and becomes a select
+# on load; if the script does not run, the links are still there and still work,
+# and every view keeps its own URL either way.
+#
+# Only Edition is marked. It is the row that grows without bound -- one entry
+# per night the pipeline runs -- and a date picker is expected to be a picker.
+# Section and Materiality are bounded sets whose counts are worth seeing.
+COLLAPSE_JS = """<script>
+(function () {
+  document.querySelectorAll('[data-collapsible]').forEach(function (row) {
+    var links = row.querySelectorAll('a.nav-link');
+    if (!links.length) return;
+
+    var select = document.createElement('select');
+    select.className = 'nav-select';
+    select.setAttribute('aria-label', row.dataset.collapsible);
+
+    links.forEach(function (a) {
+      var opt = document.createElement('option');
+      opt.value = a.getAttribute('href');
+      opt.textContent = a.textContent;
+      if (a.classList.contains('active')) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    select.addEventListener('change', function () {
+      window.location.href = select.value;
+    });
+
+    // Only now that the replacement exists: a failure above leaves the links.
+    links.forEach(function (a) { a.remove(); });
+    row.appendChild(select);
+  });
+})();
+</script>"""
 
 
 def _txn_line(r) -> str:

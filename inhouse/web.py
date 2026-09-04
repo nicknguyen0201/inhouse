@@ -57,8 +57,8 @@ def dashboard(
     try:
         with conn.cursor() as cur:
             cur.execute(DAYS_SQL)
-            days = [r[0] for r in cur.fetchall()]
-            chosen = _resolve_day(day, days)
+            days = cur.fetchall()
+            chosen = _resolve_day(day, [d for d, _ in days])
 
             cur.execute(SECTORS_SQL, (chosen,))
             sectors = cur.fetchall()
