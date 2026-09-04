@@ -258,11 +258,21 @@ def _company_link(company: str, url: str | None, primary_document: str | None = 
     )
 
 
+# An emoji as an inline SVG, so the tab icon needs no separate file to host or
+# to keep in step with a static build. A newspaper, for a page that is one.
+FAVICON = (
+    "data:image/svg+xml,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+    "<text y='.9em' font-size='90'>🗞️</text></svg>"
+)
+
+
 def _page(body: str, title: str = "inhouse") -> str:
     return (
         f"<!doctype html><html lang=en><head><meta charset=utf-8>"
         f"<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<meta name=color-scheme content='dark light'>"
+        f"<link rel=icon href=\"{FAVICON}\">"
         f"<title>{escape(title)}</title><style>{CSS}</style></head>"
         f"<body>{body}</body></html>"
     )
