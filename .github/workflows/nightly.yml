@@ -127,14 +127,22 @@ jobs:
         # Polls for the marker the instance writes on its way out. Boot, model
         # load and 181 filings take roughly 25 minutes.
         #
-        # The ceiling is 40 minutes, not 60, because OIDC credentials expire
-        # after an hour: a poll that runs the clock out leaves the stop step
-        # with dead credentials, and the instance keeps billing. Better to give
-        # up early with working credentials than to wait longer and lose the
-        # ability to turn the meter off.
+        # Fifty minutes. Extraction is ~22 for a normal day plus ~4 for boot
+        # and model load, so this is roughly double the expected time -- enough
+        # for a heavy filing day without waiting all night on a machine that is
+        # never going to answer.
+        #
+        # The cap used to be constrained by OIDC credentials expiring after an
+        # hour: a poll that ran the clock out left the stop step unable to stop
+        # anything. The re-mint step below removes that, so the limit is now
+        # about not burning GPU time on a hung run rather than about tokens.
+        #
+        # Whatever happens here, the instance stops itself when its own script
+        # finishes -- this timeout only decides how long the workflow waits to
+        # hear about it.
         run: |
           KEY="$STORAGE_URI/logs/extract-${{ needs.ingest.outputs.date }}.done"
-          for i in $(seq 1 80); do
+          for i in $(seq 1 100); do
             if aws s3 cp "$KEY" done.json --only-show-errors 2>/dev/null; then
               echo "Marker found after $((i / 2)) minutes"
               cat done.json
@@ -147,7 +155,7 @@ jobs:
             fi
             sleep 30
           done
-          echo "::error::extraction did not report completion within 40 minutes"
+          echo "::error::extraction did not report completion within 50 minutes"
           exit 1
 
       # Credentials from the first assume-role are close to expiry by now, and

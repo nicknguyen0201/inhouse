@@ -50,7 +50,16 @@ cd "$REPO" || { echo "no repo at $REPO"; exit 1; }
 # Take the latest code. The schema and prompt are versioned with it, and an
 # extraction run against a stale prompt would be silently wrong rather than
 # broken.
-git pull --ff-only || echo "warning: could not update repo, running what is here"
+#
+# Then re-exec. Bash reads a script as it runs, so pulling a new version
+# mid-execution leaves the already-parsed lines in force -- a fix to anything
+# above this point would not take effect until the run after next, which is a
+# genuinely confusing way to debug. RELOADED guards against a loop.
+if [ -z "${RELOADED:-}" ]; then
+    git pull --ff-only || echo "warning: could not update repo, running what is here"
+    export RELOADED=1
+    exec "$0" "$DATE"
+fi
 
 # SGLang starts independently at boot; this waits rather than assuming. Model
 # load is two to three minutes from cold.
