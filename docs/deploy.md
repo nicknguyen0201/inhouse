@@ -87,7 +87,12 @@ in the world could assume this role.
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:DeleteObject"
+      ],
       "Resource": [
         "arn:aws:s3:::<BUCKET>",
         "arn:aws:s3:::<BUCKET>/*"
@@ -95,7 +100,11 @@ in the world could assume this role.
     },
     {
       "Effect": "Allow",
-      "Action": ["ec2:StartInstances", "ec2:StopInstances"],
+      "Action": [
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:CreateTags"
+      ],
       "Resource": "arn:aws:ec2:us-east-2:<ACCOUNT_ID>:instance/<INSTANCE_ID>"
     },
     {
@@ -106,6 +115,14 @@ in the world could assume this role.
   ]
 }
 ```
+
+`DeleteObject` is only for clearing the previous night's completion marker
+before a run. Without it a stale marker makes the poll return immediately with
+yesterday's status, which looks like success.
+
+`CreateTags` is how the workflow tells the instance which date to extract: there
+is no SSH session to pass an argument through, so it sets an `ExtractDate` tag
+before starting the box and the script reads it back from instance metadata.
 
 `DescribeInstances` cannot be resource-scoped — AWS does not support it — so it
 is the one wildcard, and it only reads.

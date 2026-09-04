@@ -42,7 +42,23 @@ ORDER BY
     d.company
 """
 
-DAYS_SQL = "SELECT DISTINCT filed_at::date FROM filings ORDER BY 1 DESC LIMIT 30"
+# Days worth offering, not days that exist.
+#
+# `filings` gains rows the moment a day is ingested, but a day with no
+# extractions renders an empty page -- and a partial one (a handful of filings
+# from an interrupted run) renders a page that looks like a quiet news day when
+# it is really a broken pipeline. The threshold filters both without hiding a
+# genuinely thin Friday.
+DAYS_SQL = """
+SELECT f.filed_at::date AS day
+FROM filings f
+JOIN extractions e ON e.accession = f.accession
+WHERE f.form_type = '8-K'
+GROUP BY 1
+HAVING count(*) >= 10
+ORDER BY 1 DESC
+LIMIT 30
+"""
 
 SECTORS_SQL = """
 SELECT COALESCE(s.sector, 'Unclassified') AS sector, count(*) AS n
@@ -118,6 +134,8 @@ button:hover { background:transparent; color:var(--ink); }
           margin-bottom:5px; }
 .navrow:last-child { margin-bottom:0; }
 .navlabel { color:var(--dim); min-width:74px; }
+.current-day { font-weight:600; }
+.navsep { color:var(--dim); font-size:12px; margin-left:4px; }
 .nav-link { color:var(--dim); text-decoration:none; font-size:14px;
             border-bottom:1px solid transparent; }
 .nav-link:hover { color:var(--ink); border-bottom-color:var(--rule); }
@@ -343,11 +361,17 @@ def _static_filters(day, days, sectors, sector, materiality) -> str:
 
     rows = []
 
+    # A single day needs no picker -- two links reading "Aug 27 Aug 26" look
+    # like navigation of some other kind. With several, the current day is
+    # stated and the others are offered as alternatives.
     if len(days) > 1:
-        items = [link(f"{d:%b %-d}", d, "", "", d == day) for d in days]
+        others = [
+            link(f"{d:%a %-d %b}", d, "", "", False) for d in days if d != day
+        ]
         rows.append(
-            "<div class=navrow><span class='navlabel rubric'>Date</span>"
-            + "".join(items) + "</div>"
+            "<div class=navrow><span class='navlabel rubric'>Edition</span>"
+            f"<span class=current-day>{day:%A %-d %B}</span>"
+            "<span class=navsep>Earlier:</span>" + "".join(others) + "</div>"
         )
 
     items = [link("All", day, "", materiality, not sector)]

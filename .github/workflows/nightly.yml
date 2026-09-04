@@ -125,11 +125,16 @@ jobs:
 
       - name: Wait for extraction to finish
         # Polls for the marker the instance writes on its way out. Boot, model
-        # load and 181 filings take roughly 25 minutes; 60 is the ceiling before
-        # something is assumed wrong.
+        # load and 181 filings take roughly 25 minutes.
+        #
+        # The ceiling is 40 minutes, not 60, because OIDC credentials expire
+        # after an hour: a poll that runs the clock out leaves the stop step
+        # with dead credentials, and the instance keeps billing. Better to give
+        # up early with working credentials than to wait longer and lose the
+        # ability to turn the meter off.
         run: |
           KEY="$STORAGE_URI/logs/extract-${{ needs.ingest.outputs.date }}.done"
-          for i in $(seq 1 120); do
+          for i in $(seq 1 80); do
             if aws s3 cp "$KEY" done.json --only-show-errors 2>/dev/null; then
               echo "Marker found after $((i / 2)) minutes"
               cat done.json
@@ -142,22 +147,37 @@ jobs:
             fi
             sleep 30
           done
-          echo "::error::extraction did not report completion within 60 minutes"
+          echo "::error::extraction did not report completion within 40 minutes"
           exit 1
+
+      # Credentials from the first assume-role are close to expiry by now, and
+      # an expired credential means the stop below silently fails. Minting fresh
+      # ones costs a second and is the difference between a stopped instance and
+      # a running one nobody notices until the bill.
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: always()
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Ensure the instance is stopped
         # The box powers itself off, so this is normally a no-op. It exists for
-        # the case where it did not get that far -- a kernel panic, or a failure
-        # before the script's shutdown line. An instance left running is $380 a
-        # month, so the belt and the braces are both worth having.
+        # the case where it did not get that far -- a kernel panic, a failure
+        # before the script's shutdown line, or the unit never having been
+        # installed. An instance left running is $380 a month.
         if: always()
         run: |
           STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
                     --query 'Reservations[0].Instances[0].State.Name' --output text)
           echo "instance state: $STATE"
           if [ "$STATE" != "stopped" ] && [ "$STATE" != "stopping" ]; then
-            echo "instance did not stop itself — stopping it"
+            echo "::warning::instance did not stop itself — stopping it"
             aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
+            # Confirm rather than assume: a failed stop that goes unreported is
+            # the expensive case.
+            aws ec2 wait instance-stopping --instance-ids "$INSTANCE_ID" 2>/dev/null \
+              || aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID"
+            echo "confirmed stopping"
           fi
 
   load:
