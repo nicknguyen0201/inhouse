@@ -246,6 +246,7 @@ async def extract_day_async(
                 prompt_chars=len(prompt),
                 latency_s=latency,
                 truncated=truncated,
+                primary_document=filing.primary_filename,
             )
         )
 

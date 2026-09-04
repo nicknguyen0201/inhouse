@@ -65,12 +65,16 @@ class Extraction:
     prompt_chars: int
     latency_s: float
     truncated: bool = False
+    # Carried through so the dashboard can deep-link to the filing itself on
+    # EDGAR rather than to an index of the submission's attachments.
+    primary_document: str | None = None
 
     def to_row(self) -> dict:
         """Flattened for the manifest/JSONL. Day 5 maps this onto `extractions`."""
         return {
             "accession": self.accession,
             **self.data,
+            "primary_document": self.primary_document,
             "model": self.model,
             "extracted_at": self.extracted_at,
             "latency_s": round(self.latency_s, 3),
@@ -167,6 +171,7 @@ def extract_one(
         prompt_chars=len(prompt),
         latency_s=latency,
         truncated=truncated,
+        primary_document=filing.primary_filename,
     )
 
 

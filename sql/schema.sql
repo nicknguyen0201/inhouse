@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS extractions (
     -- The document was longer than the prompt budget, so the extraction saw
     -- only its head.
     truncated        boolean     NOT NULL DEFAULT false,
+    -- The filename of the document inside the submission, e.g. hrl-20260827.htm.
+    -- EDGAR's inline-XBRL viewer needs it to open the filing itself rather than
+    -- an index of the submission's thirteen attachments, and it is arbitrary
+    -- per filer -- there is no way to derive it from the accession.
+    primary_document text,
     -- Provenance. The schema will change -- it already has once -- and you need
     -- to know which rows came from which version rather than re-running
     -- everything to find out.
@@ -170,6 +175,14 @@ SELECT
     e.summary,
     e.materiality,
     e.facts_in_exhibit,
+    -- Lets the dashboard deep-link to the filing itself rather than to an index
+    -- of the submission's attachments.
+    e.primary_document,
+    -- The Form 4's own accession and the issuer's CIK, so the dashboard can
+    -- link the transaction to the filing that reported it. `accession` above is
+    -- the 8-K's; these two identify a different document entirely.
+    i.accession  AS txn_accession,
+    i.cik        AS txn_cik,
     i.insider,
     i.role,
     i.code,

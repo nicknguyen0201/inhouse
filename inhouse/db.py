@@ -162,9 +162,9 @@ def load_filings(conn, manifest_body: str) -> int:
 
 EXTRACTIONS_SQL = """
 INSERT INTO extractions (accession, event_type, direction, summary, materiality,
-                         facts_in_exhibit, truncated,
+                         facts_in_exhibit, truncated, primary_document,
                          model, extracted_at, latency_s)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (accession) DO UPDATE SET
     event_type       = EXCLUDED.event_type,
     direction        = EXCLUDED.direction,
@@ -172,6 +172,7 @@ ON CONFLICT (accession) DO UPDATE SET
     materiality      = EXCLUDED.materiality,
     facts_in_exhibit = EXCLUDED.facts_in_exhibit,
     truncated        = EXCLUDED.truncated,
+    primary_document = EXCLUDED.primary_document,
     model            = EXCLUDED.model,
     extracted_at     = EXCLUDED.extracted_at,
     latency_s        = EXCLUDED.latency_s
@@ -190,6 +191,7 @@ def load_extractions(conn, jsonl_body: str) -> int:
             r["accession"], r["event_type"], r.get("direction"),
             r["summary"], r["materiality"],
             bool(r.get("facts_in_exhibit")), bool(r.get("truncated")),
+            r.get("primary_document"),
             r.get("model", "unknown"),
             _parse_ts(r["extracted_at"]) if r.get("extracted_at") else datetime.utcnow(),
             r.get("latency_s"),

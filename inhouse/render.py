@@ -15,6 +15,7 @@ nothing and would put a database credential on a public host.
 from __future__ import annotations
 
 from datetime import date, timedelta
+import re
 from html import escape
 
 ROWS_SQL = """
@@ -24,7 +25,7 @@ SELECT
     COALESCE(s.division, 'Unclassified') AS division,
     d.filed_at, d.source_url,
     d.event_type, d.direction, d.summary, d.materiality,
-    d.facts_in_exhibit,
+    d.facts_in_exhibit, d.primary_document,
     d.insider, d.role, d.code, d.shares, d.price_usd, d.txn_date,
     d.txn_value_usd, d.footnotes
 FROM daily_dashboard d
@@ -140,6 +141,9 @@ main { max-width:760px; margin:0 auto; padding:22px 24px 70px; }
 .co-link { color:inherit; text-decoration:none;
            border-bottom:1px solid var(--rule); }
 .co-link:hover { border-bottom-color:var(--accent); color:var(--accent); }
+.txn-link { color:inherit; text-decoration:none;
+            border-bottom:1px solid var(--rule); }
+.txn-link:hover { border-bottom-color:currentColor; }
 .summary::first-letter { font-size:1em; }
 .exhibit { color:var(--dim); font-size:14px; font-style:italic; margin:5px 0 0; }
 
@@ -168,18 +172,68 @@ def _money(v) -> str:
     return f"${v:,.0f}"
 
 
-def _company_link(company: str, url: str | None) -> str:
+def filing_url(source_url: str | None, primary_document: str | None = None) -> str | None:
+    """EDGAR's index page for the submission a summary describes.
+
+    The stored source_url points at the raw SGML -- the exact bytes the model
+    read, which is honest and unreadable: 1.7MB wrapping thirteen attachments.
+    The index page lists those attachments as formatted documents:
+
+        raw    /Archives/edgar/data/1308547/0001193125-26-369707.txt
+        index  /Archives/edgar/data/1308547/0001193125-26-369707-index.htm
+
+    Deliberately the index rather than EDGAR's inline-XBRL viewer, which would
+    open the 8-K body directly. 65% of filings state their figures in an exhibit
+    rather than the body, so a reader checking "released second quarter results"
+    needs Exhibit 99, and only the index page offers it. One extra click buys
+    the whole submission.
+
+    `primary_document` is accepted and unused: it is what a viewer link would
+    need, and the signature records that the choice was made rather than missed.
+    """
+    if not source_url:
+        return None
+    match = re.search(r"/edgar/data/(\d+)/([\d-]+)\.txt$", source_url)
+    if not match:
+        return source_url          # unrecognised shape: link what we have
+    cik, accession = match.groups()
+    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}-index.htm"
+
+
+def form4_url(cik: str | None, accession: str | None) -> str | None:
+    """EDGAR's rendered Form 4 for a transaction.
+
+    Unlike an 8-K, nothing needs storing: every Form 4 in the corpus has exactly
+    one attachment named ownership.xml, because the filer completes a web form
+    and EDGAR emits the XML itself. The viewer renders that XML as the familiar
+    tabular Form 4.
+
+    The link matters more here than for an 8-K. A transaction row says "sold
+    289,624 shares"; the filing says those shares belonged to a deceased
+    founder's estate. 88% of transactions carry a footnote that changes how the
+    row should be read, and the dashboard shows at most two.
+    """
+    if not cik or not accession:
+        return None
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}-index.htm"
+    )
+
+
+def _company_link(company: str, url: str | None, primary_document: str | None = None) -> str:
     """The headline links to the filing it summarises.
 
     Every summary here is a model's reading of a document, and it can be wrong.
     One click to the original is the difference between a claim and a citation.
     """
     name = escape(company)
-    if not url:
+    target = filing_url(url, primary_document)
+    if not target:
         return name
     return (
-        f"<a class=co-link href='{escape(url, quote=True)}' "
-        f"target=_blank rel='noopener noreferrer'>{name}</a>"
+        f"<a class=co-link href='{escape(target, quote=True)}' "
+        f"target=_blank rel='noopener noreferrer' "
+        f"title='Open this filing on sec.gov'>{name}</a>"
     )
 
 
@@ -204,7 +258,7 @@ def group_filings(rows) -> dict:
     filings: dict[str, dict] = {}
     for r in rows:
         f = filings.setdefault(r[0], {"meta": r, "txns": []})
-        if r[13]:
+        if r[16]:            # insider column, after txn_accession/txn_cik
             f["txns"].append(r)
     return filings
 
@@ -311,12 +365,17 @@ AVERAGED = ("weighted average",)
 
 
 def _txn_line(r) -> str:
-    (_, _, _, _, _, _, _, _, _, _, _, _, _,
+    (_, _, _, _, _, _, _, _, _, _, _, _, _, _, txn_accession, txn_cik,
      insider, role, code, shares, price, txn_date, value, footnotes) = r
 
     verb = "sold" if code == "S" else "bought"
     cls = "sale" if code == "S" else "buy"
     who = escape(insider or "")
+    link = form4_url(txn_cik, txn_accession)
+    if link:
+        who = (f"<a class=txn-link href='{escape(link, quote=True)}' "
+               f"target=_blank rel='noopener noreferrer' "
+               f"title='Open this Form 4 on sec.gov'>{who}</a>")
     what = f"{float(shares):,.0f} shares" if shares is not None else "shares"
     amount = f" worth {_money(value)}" if value else ""
     role_txt = f", {escape(role)}," if role else ""
@@ -353,7 +412,8 @@ def _body(filings: dict) -> str:
 
     for f in filings.values():
         (_acc, company, sic, _sic_desc, sector, _div, _filed, source_url,
-         event, direction, summary, materiality, in_exhibit) = f["meta"][:13]
+         event, direction, summary, materiality, in_exhibit,
+         primary_document) = f["meta"][:14]
 
         # The kicker carries the apparatus -- section, event type, importance --
         # so the headline itself can be just the company name.
@@ -370,7 +430,7 @@ def _body(filings: dict) -> str:
         out.append(
             "<article class=filing>"
             f"<div class=kicker>{''.join(kicker)}</div>"
-            f"<h2 class=co>{_company_link(company, source_url)}</h2>"
+            f"<h2 class=co>{_company_link(company, source_url, primary_document)}</h2>"
             f"<p class=summary><span class='summary-label rubric'>Summary</span>"
             f"{escape(summary)}</p>"
         )
