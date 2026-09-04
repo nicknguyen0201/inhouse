@@ -34,6 +34,7 @@ from .render import (
     _header,
     _page,
     group_filings,
+    rows_to_dicts,
 )
 
 MATERIALITIES = ("", "high", "medium", "low")
@@ -88,7 +89,7 @@ def build(conn, out: Path, days_limit: int = 5) -> int:
         for sector, materiality in combos:
             with conn.cursor() as cur:
                 cur.execute(ROWS_SQL, (day, sector, sector, materiality, materiality))
-                rows = cur.fetchall()
+                rows = rows_to_dicts(cur, cur.fetchall())
 
             filings = group_filings(rows)
             n_txns = sum(1 for f in filings.values() if f["txns"])

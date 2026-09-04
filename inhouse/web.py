@@ -25,6 +25,7 @@ from .render import (
     _page,
     _resolve_day,
     group_filings,
+    rows_to_dicts,
 )
 
 app = FastAPI(title="inhouse", docs_url=None, redoc_url=None)

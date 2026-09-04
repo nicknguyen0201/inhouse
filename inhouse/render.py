@@ -249,7 +249,19 @@ def _page(body: str, title: str = "inhouse") -> str:
 
 
 
-def group_filings(rows) -> dict:
+def rows_to_dicts(cursor, rows) -> list[dict]:
+    """Name the columns, using the cursor's own description.
+
+    Positional unpacking made every schema change a landmine: adding a column to
+    the view shifted every index after it, and the failure was a ValueError
+    about tuple length rather than anything naming the column. The view is the
+    contract; this reads it from the database instead of restating it here.
+    """
+    names = [c[0] for c in cursor.description]
+    return [dict(zip(names, r)) for r in rows]
+
+
+def group_filings(rows: list[dict]) -> dict:
     """Collapse the join's fan-out back to one entry per filing.
 
     An 8-K matching three insider transactions arrives as three rows; the page
@@ -257,8 +269,8 @@ def group_filings(rows) -> dict:
     """
     filings: dict[str, dict] = {}
     for r in rows:
-        f = filings.setdefault(r[0], {"meta": r, "txns": []})
-        if r[16]:            # insider column, after txn_accession/txn_cik
+        f = filings.setdefault(r["accession"], {"meta": r, "txns": []})
+        if r.get("insider"):
             f["txns"].append(r)
     return filings
 
@@ -365,13 +377,15 @@ AVERAGED = ("weighted average",)
 
 
 def _txn_line(r) -> str:
-    (_, _, _, _, _, _, _, _, _, _, _, _, _, _, txn_accession, txn_cik,
-     insider, role, code, shares, price, txn_date, value, footnotes) = r
+    code = r["code"]
+    shares, value = r["shares"], r["txn_value_usd"]
+    insider, role, txn_date = r["insider"], r["role"], r["txn_date"]
+    footnotes = r["footnotes"]
+    link = form4_url(r.get("txn_cik"), r.get("txn_accession"))
 
     verb = "sold" if code == "S" else "bought"
     cls = "sale" if code == "S" else "buy"
     who = escape(insider or "")
-    link = form4_url(txn_cik, txn_accession)
     if link:
         who = (f"<a class=txn-link href='{escape(link, quote=True)}' "
                f"target=_blank rel='noopener noreferrer' "
@@ -411,9 +425,12 @@ def _body(filings: dict) -> str:
     ]
 
     for f in filings.values():
-        (_acc, company, sic, _sic_desc, sector, _div, _filed, source_url,
-         event, direction, summary, materiality, in_exhibit,
-         primary_document) = f["meta"][:14]
+        m = f["meta"]
+        company, sic, sector = m["company"], m["sic"], m["sector"]
+        event, direction = m["event_type"], m["direction"]
+        summary, materiality = m["summary"], m["materiality"]
+        in_exhibit, source_url = m["facts_in_exhibit"], m["source_url"]
+        primary_document = m.get("primary_document")
 
         # The kicker carries the apparatus -- section, event type, importance --
         # so the headline itself can be just the company name.
