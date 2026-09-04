@@ -1,0 +1,79 @@
+name: pages
+
+# Publish the dashboard as static HTML.
+#
+# The data changes once a night, so serving it from a running process would buy
+# nothing and cost two things: somewhere to run, and a database credential on a
+# public host. Rendering in CI has neither -- the credential is already here and
+# never leaves, and GitHub serves the result.
+#
+# Runs after the nightly pipeline finishes, and on demand.
+
+on:
+  workflow_run:
+    workflows: [nightly]
+    types: [completed]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Only when something that affects the output changes. A README edit should
+    # not redeploy the site.
+    paths:
+      - "inhouse/render.py"
+      - "inhouse/build.py"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  # One deployment at a time, and let a newer build supersede a queued one --
+  # the site is a snapshot, so the freshest render is the only one worth having.
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e .
+
+      - name: Render
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -m inhouse.build --out site --days 5
+          echo "### Pages built" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls site | head -20 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the output is not empty
+        # A build that silently produces an empty site would deploy over a good
+        # one. Better to fail and leave the previous deployment standing.
+        run: |
+          test -s site/index.html || { echo "::error::index.html is empty"; exit 1; }
+          COUNT=$(grep -c "class=filing" site/index.html || true)
+          echo "front page carries $COUNT filings"
+          [ "$COUNT" -gt 0 ] || { echo "::error::front page has no filings"; exit 1; }
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
