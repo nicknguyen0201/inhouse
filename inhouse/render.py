@@ -26,6 +26,9 @@ SELECT
     d.filed_at, d.source_url,
     d.event_type, d.direction, d.summary, d.materiality,
     d.facts_in_exhibit, d.primary_document,
+    -- The Form 4's own accession and issuer CIK, so a transaction can link to
+    -- the filing that reported it. `accession` above is the 8-K's.
+    d.txn_accession, d.txn_cik,
     d.insider, d.role, d.code, d.shares, d.price_usd, d.txn_date,
     d.txn_value_usd, d.footnotes
 FROM daily_dashboard d
