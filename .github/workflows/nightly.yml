@@ -70,21 +70,6 @@ jobs:
           cache: pip
       - run: pip install -e .
 
-      # TEMPORARY: prints the claims AWS is matching against the role's trust
-      # policy. Remove once the assume-role works -- it is noise, not a
-      # permanent check.
-      - name: Show OIDC claims
-        run: |
-          TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-            echo "::error::no OIDC token was issued -- id-token: write is missing or blocked"
-            exit 1
-          fi
-          echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null \
-            | jq '{sub, aud, repository, ref}' || true
-          echo "role variable: [${{ vars.AWS_ROLE_ARN }}]"
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
@@ -201,6 +186,10 @@ jobs:
       - name: Load
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # The load path never calls EDGAR, but Config validates every field on
+          # construction -- including the User-Agent the SEC requires. Cheaper to
+          # pass it than to make the config lazy.
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: |
           set -o pipefail
           # Idempotent: filings and extractions upsert on their keys, insider
