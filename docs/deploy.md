@@ -220,8 +220,32 @@ sudo systemctl enable --now sglang
 sudo systemctl enable nightly-extract     # enable, not start: it runs at boot
 ```
 
-The instance also needs an IAM instance profile with S3 read/write on the
-bucket — it fetches filings and writes extractions itself now.
+The instance needs an IAM instance profile with S3 read/write on the bucket --
+it fetches filings and writes extractions itself -- plus `ec2:DescribeTags`,
+which is how it learns which date to process:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::<BUCKET>",
+        "arn:aws:s3:::<BUCKET>/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ec2:DescribeTags",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+`DescribeTags` cannot be resource-scoped, and it only reads.
 
 **Verify by rebooting.** "It started when I ran systemctl" and "it starts on
 boot" are different claims, and only the second is what the workflow depends on:
