@@ -14,9 +14,15 @@ GPU at all. Keeping them separate is what makes the cost argument work.
 
 ## The nightly pipeline
 
-`.github/workflows/nightly.yml` runs at 22:05 UTC, Tuesday to Saturday — filings
-land after the US market closes and EDGAR publishes its daily index shortly
-after.
+`.github/workflows/nightly.yml` runs at 09:00 UTC, Tuesday to Saturday — 2am
+Pacific, 5am Eastern. The pipeline takes about 90 minutes, so the dashboard is
+current before anyone opens it.
+
+Running overnight rather than in the evening also fixes which day gets
+processed. The date resolves to "yesterday in UTC"; at 2am Pacific that is the
+previous trading day, whose index EDGAR published hours earlier. A mid-afternoon
+run would target the day before last, because the UTC date has already rolled
+over by then.
 
 ### Why the job is split into three
 

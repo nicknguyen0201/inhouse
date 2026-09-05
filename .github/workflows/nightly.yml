@@ -23,11 +23,18 @@ name: nightly
 
 on:
   schedule:
-    # 22:05 UTC = 6:05pm ET in daylight saving. Filings land after the close and
-    # EDGAR publishes its daily index shortly after. Tue-Sat UTC covers Mon-Fri
-    # filing days. GitHub's scheduler is best-effort and can run late, which a
-    # nightly batch tolerates.
-    - cron: "5 22 * * 2-6"
+    # 09:00 UTC = 2am Pacific, 5am Eastern. Overnight, so the dashboard is fresh
+    # when someone opens it in the morning.
+    #
+    # The date resolves to "yesterday in UTC", which at 2am PT is the previous
+    # trading day -- the one whose index EDGAR published that evening. Running
+    # in the afternoon instead would target the day before last, because the UTC
+    # date has already rolled over by then.
+    #
+    # Tue-Sat UTC covers Mon-Fri filing days. GitHub's scheduler is best-effort
+    # and can start 10-30 minutes late, which a batch job that finishes hours
+    # before anyone looks at it tolerates easily.
+    - cron: "0 9 * * 2-6"
   workflow_dispatch:
     inputs:
       date:
