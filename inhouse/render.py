@@ -23,7 +23,7 @@ SELECT
     d.accession, d.company, d.sic, d.sic_description,
     COALESCE(s.sector, 'Unclassified')   AS sector,
     COALESCE(s.division, 'Unclassified') AS division,
-    d.filed_at, d.source_url,
+    d.filed_at, d.filing_date, d.source_url,
     d.event_type, d.direction, d.summary, d.materiality,
     d.facts_in_exhibit, d.primary_document,
     -- The Form 4's own accession and issuer CIK, so a transaction can link to
@@ -33,7 +33,7 @@ SELECT
     d.txn_value_usd, d.footnotes
 FROM daily_dashboard d
 LEFT JOIN sic_sectors s ON d.sic BETWEEN s.sic_from AND s.sic_to
-WHERE d.filed_at::date = %s
+WHERE d.filing_date = %s
   AND (%s = '' OR COALESCE(s.sector, 'Unclassified') = %s)
   AND (%s = '' OR d.materiality = %s)
 ORDER BY
@@ -50,7 +50,7 @@ ORDER BY
 # fraction of the median, which was arithmetic in place of a label. Showing the
 # count says the same thing without deciding for the reader.
 DAYS_SQL = """
-SELECT f.filed_at::date AS day, count(*) AS n
+SELECT f.filing_date AS day, count(*) AS n
 FROM filings f
 JOIN extractions e ON e.accession = f.accession
 WHERE f.form_type = '8-K'
@@ -63,7 +63,7 @@ SECTORS_SQL = """
 SELECT COALESCE(s.sector, 'Unclassified') AS sector, count(*) AS n
 FROM daily_dashboard d
 LEFT JOIN sic_sectors s ON d.sic BETWEEN s.sic_from AND s.sic_to
-WHERE d.filed_at::date = %s
+WHERE d.filing_date = %s
 GROUP BY 1 ORDER BY 2 DESC, 1
 """
 

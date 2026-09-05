@@ -115,6 +115,9 @@ def test_manifest_has_one_row_per_filing_with_expected_fields(config, storage, t
         "company": "Apple Inc.",
         "form": "8-K",
         "filed_at": "2026-08-26",
+        # From the index. Distinct from filed_at because EDGAR's 17:30 cutoff
+        # pushes a late-evening submission onto the next day's index.
+        "filing_date": "2026-08-26",
         "sic": "3571",
         "sic_description": "Electronic Computers",
         "s3_key": "raw/2026-08-26/0000320193-26-000123.txt",
@@ -261,3 +264,25 @@ def test_shared_accession_stores_one_file(config, storage, tmp_path):
     run(config, storage, tmp_path, client=MultiPartyClient())
     stored = sorted(p.name for p in (Path(storage.root) / "raw" / "2026-08-26").iterdir())
     assert stored == ["0000058492-26-000491.txt", "0000320193-26-000123.txt"]
+
+
+def test_filing_date_comes_from_the_index_not_the_acceptance_time(config, storage, tmp_path):
+    """EDGAR's cutoff is 17:30 ET, so a submission accepted at 21:05 on Tuesday
+    is filed Wednesday and appears in Wednesday's index. Deriving the day from
+    the acceptance timestamp invents a Tuesday that EDGAR does not recognise --
+    it produced a phantom day of eight filings on a real run."""
+    class LateEvening(FakeClient):
+        def document(self, path):
+            self.document_calls.append(path)
+            return (
+                b"<SEC-DOCUMENT>x.txt : 20260826\n"
+                b"<ACCEPTANCE-DATETIME>20260826210530\n"   # 21:05, after cutoff
+                b"rest of filing"
+            )
+
+    run(config, storage, tmp_path, client=LateEvening())
+    for row in read_manifest(storage):
+        # The acceptance timestamp keeps the real time...
+        assert row["filed_at"] == "2026-08-26T21:05:30"
+        # ...while the filing date stays what the index said.
+        assert row["filing_date"] == "2026-08-26"

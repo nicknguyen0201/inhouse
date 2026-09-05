@@ -50,7 +50,8 @@ class ManifestRecord:
     cik: str
     company: str
     form: str
-    filed_at: str
+    filed_at: str          # acceptance timestamp, to the second
+    filing_date: str       # the date EDGAR files it under, from the index
     sic: str | None
     sic_description: str | None
     s3_key: str
@@ -172,6 +173,11 @@ def ingest(
                 company=info.get("company") or member.company,
                 form=member.form,
                 filed_at=_filed_at(body, member.filed_date),
+                # From the index, not derived from the acceptance time. EDGAR's
+                # cutoff is 17:30 ET, so a submission accepted at 21:05 on
+                # Tuesday is filed on Wednesday and appears in Wednesday's
+                # index. Grouping by the acceptance date invents a day.
+                filing_date=member.filed_date.isoformat(),
                 sic=info.get("sic"),
                 sic_description=info.get("sic_description"),
                 s3_key=key,

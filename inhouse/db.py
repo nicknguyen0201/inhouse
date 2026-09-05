@@ -118,13 +118,14 @@ def _parse_ts(value: str) -> datetime:
 
 
 FILINGS_SQL = """
-INSERT INTO filings (accession, cik, company, form_type, filed_at,
+INSERT INTO filings (accession, cik, company, form_type, filed_at, filing_date,
                      sic, sic_description, s3_key, source_url)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (accession, cik) DO UPDATE SET
     company         = EXCLUDED.company,
     form_type       = EXCLUDED.form_type,
     filed_at        = EXCLUDED.filed_at,
+    filing_date     = EXCLUDED.filing_date,
     sic             = EXCLUDED.sic,
     sic_description = EXCLUDED.sic_description,
     s3_key          = EXCLUDED.s3_key,
@@ -147,7 +148,11 @@ def load_filings(conn, manifest_body: str) -> int:
         r = json.loads(line)
         rows.append((
             r["accession"], r["cik"], r["company"], r["form"],
-            _parse_ts(r["filed_at"]), r.get("sic"), r.get("sic_description"),
+            _parse_ts(r["filed_at"]),
+            # Older manifests predate the column; their acceptance date is the
+            # best available answer.
+            r.get("filing_date") or _parse_ts(r["filed_at"]).date().isoformat(),
+            r.get("sic"), r.get("sic_description"),
             r["s3_key"], r.get("source_url"),
         ))
 
