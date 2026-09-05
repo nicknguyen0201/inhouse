@@ -51,10 +51,10 @@
       ]
     },
     "summary": {
-      "description": "Two sentences, plain language, naming who did what. No boilerplate, no 'the Company announced that'.",
+      "description": "Two sentences, plain language, naming who did what. No boilerplate, no 'the Company announced that'. The length cap is a backstop, not a target: constrained decoding cuts mid-word at the limit rather than summarising more tightly, so a summary that reaches it has been amputated.",
       "type": "string",
       "minLength": 40,
-      "maxLength": 400
+      "maxLength": 600
     },
     "materiality": {
       "description": "high = likely to move the stock or change the investment case. medium = a reader covering this name should know. low = procedural or administrative.",

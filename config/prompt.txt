@@ -17,8 +17,9 @@ Rules:
      shareholder_vote - holders actually voted, with tallies reported.
 2. Do not infer facts. If the filing says a press release is attached but does
    not state the numbers, leave amounts empty and set facts_in_exhibit true.
-3. summary names who did what. Never open with "The Company announced" or
-   restate the item title.
+3. summary names who did what, in two sentences. Never open with "The Company
+   announced" or restate the item title. Two sentences is a limit, not a
+   target -- a dividend needs one. 
 4. materiality is about consequence, not length:
      high   - changes the investment case: CEO/CFO departure, merger, guidance
               cut, delisting, restatement, bankruptcy, major litigation.
