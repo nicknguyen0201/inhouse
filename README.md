@@ -2,16 +2,106 @@
 
 **Self-hosted batch document extraction. Runs on your own GPU, in your own network — nothing leaves.**
 
-Documents go in, schema-valid JSON comes out. The pipeline makes no outbound call during
-extraction, so it can run against documents that could not be sent to a hosted API.
+---
 
-The included demo processes each day's SEC 8-K filings and Form 4 insider transactions — a few
-hundred documents nightly on a single T4, for roughly $7/month in GPU and storage. Fork it, swap the source and the
-schema, and point it at your own corpus.
+One ordinary Thursday on the SEC's wire — 27 August 2026 — produced 181 8-K filings.
+
+|  | to read them yourself | after this pipeline |
+|---|---|---|
+| Words | **125,329** | **7,510** |
+| At 200 wpm | **10.4 hours** | **38 minutes** |
+| Per filing | 692 words | 41 words |
+
+Sixteen times less to read, and the 8-K/Form-4 correlations already attached — an executive who
+sold shares in the days before their company filed something material, which neither document shows
+on its own.
+
+That is one public corpus, chosen because you can check the output against sec.gov yourself. The
+point is the shape: **a few hundred documents every night, each reduced to a row you can sort.**
+
+<details>
+<summary><b>One filing, before and after</b> — the median document of that day, 405 words</summary>
+
+Arthur J. Gallagher & Co., filed 27 August. The submission on EDGAR is 138 KB of SGML wrapping
+eleven attachments; this is what remains after the envelope, the XBRL and the exhibits are stripped:
+
+> **Item 5.02 Departure of Directors or Certain Officers; Election of Directors; Appointment of
+> Certain Officers; Compensatory Arrangements of Certain Officers.** On August 24, 2026, Richard C.
+> Cary, age 63, Controller and Chief Accounting Officer of Arthur J. Gallagher & Co. (the
+> "Company"), notified the Company that he plans to retire in 2028 and step down from his role as
+> Controller and Chief Accounting Officer (and as the Company's principal accounting officer)
+> effective September 30, 2026. Mr. Cary has served as the Company's Controller since 1997 and as
+> its Chief Accounting Officer since 2001. He will remain employed by the Company as Corporate Vice
+> President - Accounting and will support the transition through his expected retirement in 2028.
+> Mr. Cary's planned retirement is not due to any disagreement with the Company on any matter
+> relating to the Company's financial statements, internal control over financial reporting,
+> operations, policies or practices. In conjunction with this transition and consistent with the
+> Company's succession planning, Kyle G. Koreyva, age 42, will succeed Mr. Cary as Controller and
+> Chief Accounting Officer (and as the Company's principal accounting officer), effective October
+> 1, 2026. Mr. Koreyva joined the Company as part of the Company's acquisition of AssuredPartners
+> in August 2025. He has held progressively senior accounting and finance roles over the past 20
+> years, most recently serving as the Company's Vice President, Accounting and prior to the
+> acquisition as AssuredPartners' Chief Accounting Officer starting in June 2024. Prior to joining
+> AssuredPartners, Mr. Koreyva served as Vice President, Finance and Divisional Chief Financial
+> Officer of Westchester, a division of Chubb, from April 2020 to June 2024. Before then, Mr.
+> Koreyva spent the first 14 years of his career with PricewaterhouseCoopers as an auditor in its
+> assurance practice, including three years in its national office. There are no changes to the
+> compensation arrangements for Mr. Koreyva in connection with his assuming the role of Controller
+> and Chief Accounting Officer. Mr. Koreyva has no family relationship with any director or
+> executive officer of the Company, and there are no transactions involving Mr. Koreyva that
+> require disclosure under Item 404(a) of Regulation S-K. SIGNATURES Pursuant to the requirements
+> of the Securities Exchange Act of 1934, the registrant has duly caused this report to be signed
+> on its behalf by the undersigned hereunto duly authorized...
+
+**What the pipeline stores — 56 words:**
+
+> Richard C. Cary, Arthur J. Gallagher & Co.'s Controller and Chief Accounting Officer, plans to
+> retire in 2028 and will step down from his roles effective September 30, 2026. Kyle G. Koreyva,
+> who joined the company as part of its acquisition of AssuredPartners, will succeed him as
+> Controller and Chief Accounting Officer starting October 1, 2026.
+
+```
+event_type   executive_change
+direction    departure
+materiality  medium
+sector       Insurance
+```
+
+Seven times shorter, and sortable. Note what the summary drops: Koreyva's fourteen years at
+PwC, the Regulation S-K boilerplate, the signature block. Note what it keeps: both names, both
+dates, and the fact that this is a succession rather than a resignation — which is the difference
+between a routine filing and one worth opening.
+
+</details>
+
+---
+
+## Point it at your own documents
+
+The reason to run this rather than call an API is that **the documents never leave your network.**
+Extraction makes no outbound call — the model runs on hardware you control, reads from storage you
+control, and writes to a database you control. There is no vendor to trust with the contents, no
+terms of service to re-read when they change, and nothing to explain to a compliance team.
+
+That matters for the corpora that are actually worth extracting:
+
+- **Contracts and agreements** — the counterparty's confidentiality clause probably forbids sending
+  them to a third party at all
+- **Medical records, claims, case files** — regulated, and the regulation does not care that the
+  API promises not to train on them
+- **Internal documents** — incident reports, board minutes, customer correspondence
+- **Anything under NDA**, where "we used a hosted service" is the wrong answer to a question you
+  will eventually be asked
+
+The demo uses public filings precisely so the quality is checkable. Swap three files —
+`config/source.py`, `config/schema.json`, `config/prompt.txt` — and the rest of the pipeline does
+not know or care what the documents are.
 
 > For a single document, a frontier API is better and cheaper. This is for the case where you need
 > hundreds processed identically every night, with guaranteed-valid output, on data that has to
 > stay put.
+
+Roughly **$7/month** in GPU and storage for a few hundred documents nightly on a single T4.
 
 ---
 
