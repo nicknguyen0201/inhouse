@@ -18,7 +18,16 @@ CREATE TABLE IF NOT EXISTS filings (
     cik              char(10)    NOT NULL,
     company          text        NOT NULL,
     form_type        text        NOT NULL,
+    -- When EDGAR accepted the submission, to the second. The day-5 join windows
+    -- insider transactions against this, and a filing accepted at 16:32 sits
+    -- differently against the market close than one at 06:00.
     filed_at         timestamp   NOT NULL,
+    -- The date EDGAR *files* it under, from the daily index. Not the same thing:
+    -- EDGAR's cutoff is 17:30 ET, so a submission accepted at 21:05 on Tuesday
+    -- is filed Wednesday and appears in Wednesday's index. Grouping by the
+    -- acceptance date instead produced a phantom day of eight filings -- all of
+    -- them Tuesday evening arrivals that EDGAR had published on Wednesday.
+    filing_date      date        NOT NULL,
     -- Individual filers (the people behind Form 4s) have no SIC at all, so this
     -- is null for roughly 44% of rows. Not a failure -- the dashboard reaches
     -- the issuer's SIC through the CIK relationship.
@@ -29,7 +38,7 @@ CREATE TABLE IF NOT EXISTS filings (
     PRIMARY KEY (accession, cik)
 );
 
-CREATE INDEX IF NOT EXISTS filings_day_idx    ON filings ((filed_at::date));
+CREATE INDEX IF NOT EXISTS filings_day_idx    ON filings (filing_date);
 CREATE INDEX IF NOT EXISTS filings_cik_idx    ON filings (cik, filed_at);
 CREATE INDEX IF NOT EXISTS filings_sic_idx    ON filings (substr(sic, 1, 2));
 CREATE INDEX IF NOT EXISTS filings_accession_idx ON filings (accession);
@@ -166,6 +175,7 @@ SELECT
     f.sic,
     f.sic_description,
     f.filed_at,
+    f.filing_date,
     -- So the dashboard can link a headline back to the filing it summarises.
     -- Every summary on the page is a model's reading of a document, and the
     -- reader has to be one click from checking it.
