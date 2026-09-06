@@ -25,6 +25,7 @@ from .render import (
     _page,
     _resolve_day,
     group_filings,
+    rows_params,
     rows_to_dicts,
 )
 
@@ -52,6 +53,7 @@ def dashboard(
     day: str = Query(""),
     sector: str = Query(""),
     materiality: str = Query(""),
+    insider: str = Query(""),
 ) -> str:
     conn = connect(_dsn())
     try:
@@ -71,7 +73,7 @@ def dashboard(
     filings = group_filings(rows)
     n_txns = sum(1 for f in filings.values() if f["txns"])
     return _page(
-        _header(chosen, len(filings), n_txns)
+        _header(chosen, len(filings), n_txns, insider_href="?insider=1")
         + _filters(chosen, days, sectors, sector, materiality)
         + _body(filings),
         f"inhouse — {chosen}",

@@ -34,13 +34,14 @@ from .render import (
     _header,
     _page,
     group_filings,
+    rows_params,
     rows_to_dicts,
 )
 
 MATERIALITIES = ("", "high", "medium", "low")
 
 
-def page_name(day: date, sector: str, materiality: str) -> str:
+def page_name(day: date, sector: str, materiality: str, insider: str = "") -> str:
     """Stable, linkable filenames.
 
     `index.html` is the unfiltered latest day; everything else is explicit, so a
@@ -52,6 +53,8 @@ def page_name(day: date, sector: str, materiality: str) -> str:
         parts.append(sector.lower().replace(" & ", "-").replace(" ", "-"))
     if materiality:
         parts.append(materiality)
+    if insider:
+        parts.append("insider")
     return "-".join(parts) + ".html"
 
 
@@ -82,26 +85,34 @@ def build(conn, out: Path, days_limit: int = 5) -> int:
         # The unfiltered page, then one per sector, then one per materiality.
         # Cross-producting sector x materiality would be ~90 pages a day for
         # combinations nobody asks for.
+        # (sector, materiality, insider-only). The last is its own page rather
+        # than a cross-product: it is the join the project exists for, so it is
+        # worth a URL, but crossing it with 22 sectors would be pages nobody
+        # asks for.
         combos = (
-            [("", "")]
-            + [(s, "") for s, _ in sectors]
-            + [("", m) for m in MATERIALITIES if m]
+            [("", "", "")]
+            + [(s, "", "") for s, _ in sectors]
+            + [("", m, "") for m in MATERIALITIES if m]
+            + [("", "", "insider")]
         )
 
-        for sector, materiality in combos:
+        for sector, materiality, insider in combos:
             with conn.cursor() as cur:
-                cur.execute(ROWS_SQL, (day, sector, sector, materiality, materiality))
+                cur.execute(ROWS_SQL, rows_params(day, sector, materiality, insider))
                 rows = rows_to_dicts(cur, cur.fetchall())
 
             filings = group_filings(rows)
             n_txns = sum(1 for f in filings.values() if f["txns"])
             html = _page(
-                _header(day, len(filings), n_txns)
-                + _filters(day, days, sectors, sector, materiality, static=True)
+                _header(day, len(filings), n_txns,
+                        insider_href=page_name(day, "", "", "insider"))
+                + _filters(day, days, sectors, sector, materiality, static=True,
+                           insider=insider)
                 + _body(filings),
                 f"inhouse — {day}",
             )
-            (out / page_name(day, sector, materiality)).write_text(html, encoding="utf-8")
+            (out / page_name(day, sector, materiality, insider)).write_text(
+                html, encoding="utf-8")
             written += 1
 
     # The newest day, unfiltered, is the front page.

@@ -36,6 +36,13 @@ LEFT JOIN sic_sectors s ON d.sic BETWEEN s.sic_from AND s.sic_to
 WHERE d.filing_date = %s
   AND (%s = '' OR COALESCE(s.sector, 'Unclassified') = %s)
   AND (%s = '' OR d.materiality = %s)
+  -- Filings with an insider transaction in the window. Restricting the LEFT
+  -- JOIN's own predicate would turn it into an inner join and drop the
+  -- unmatched rows entirely; this filters to accessions that matched, while
+  -- leaving the join itself alone.
+  AND (%s = '' OR d.accession IN (
+        SELECT accession FROM daily_dashboard
+        WHERE filing_date = %s AND insider IS NOT NULL))
 ORDER BY
     CASE d.materiality WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
     d.txn_value_usd DESC NULLS LAST,
@@ -133,6 +140,9 @@ button:hover { background:transparent; color:var(--ink); }
           margin-bottom:5px; }
 .navrow:last-child { margin-bottom:0; }
 .navlabel { color:var(--dim); min-width:74px; }
+.dateline-link { color:inherit; text-decoration:none;
+                 border-bottom:1px solid var(--rule); }
+.dateline-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
 .nav-link { color:var(--dim); text-decoration:none; font-size:14px;
             border-bottom:1px solid transparent; }
 .nav-link:hover { color:var(--ink); border-bottom-color:var(--rule); }
@@ -306,6 +316,12 @@ def group_filings(rows: list[dict]) -> dict:
     return filings
 
 
+def rows_params(day, sector: str, materiality: str, insider: str = "") -> tuple:
+    """Parameters for ROWS_SQL, in order. Kept beside the query so a new filter
+    cannot be added to one without the other."""
+    return (day, sector, sector, materiality, materiality, insider, day)
+
+
 def _resolve_day(requested: str, days: list[date]) -> date:
     if requested:
         try:
@@ -315,20 +331,30 @@ def _resolve_day(requested: str, days: list[date]) -> date:
     return days[0] if days else date.today() - timedelta(days=1)
 
 
-def _header(day: date, n_filings: int, n_txns: int) -> str:
+def _header(day: date, n_filings: int, n_txns: int,
+            insider_href: str | None = None) -> str:
     """Masthead and dateline, in the order a paper prints them."""
+    # The join is the reason the project exists, so the insider count is the one
+    # number in the dateline that goes somewhere.
+    if insider_href and n_txns:
+        txns = (f"<a class=dateline-link href='{insider_href}'>"
+                f"{n_txns} with insider activity</a>")
+    else:
+        txns = f"{n_txns} with insider activity"
+
     return (
         "<div class=masthead><h1>inhouse</h1>"
         "<div class='dateline rubric'>"
         f"<span>{day:%A, %B %-d, %Y}</span>"
         "<span>SEC Edgar</span>"
         f"<span>{n_filings} filings</span>"
-        f"<span>{n_txns} with insider activity</span>"
+        f"<span>{txns}</span>"
         "</div></div>"
     )
 
 
-def _filters(day, days, sectors, sector, materiality, static: bool = False) -> str:
+def _filters(day, days, sectors, sector, materiality, static: bool = False,
+             insider: str = "") -> str:
     """The controls.
 
     Two forms of the same thing. The live server posts a GET form; the static
@@ -337,7 +363,7 @@ def _filters(day, days, sectors, sector, materiality, static: bool = False) -> s
     which a client-side filter would not be.
     """
     if static:
-        return _static_filters(day, days, sectors, sector, materiality)
+        return _static_filters(day, days, sectors, sector, materiality, insider)
 
     day_opts = "".join(
         f"<option value='{d}'{' selected' if d == day else ''}>{d} ({n})</option>"
@@ -361,11 +387,11 @@ def _filters(day, days, sectors, sector, materiality, static: bool = False) -> s
     )
 
 
-def _static_filters(day, days, sectors, sector, materiality) -> str:
+def _static_filters(day, days, sectors, sector, materiality, insider="") -> str:
     from .build import page_name
 
-    def link(label, target_day, target_sector, target_mat, active):
-        href = page_name(target_day, target_sector, target_mat)
+    def link(label, target_day, target_sector, target_mat, active, target_insider=""):
+        href = page_name(target_day, target_sector, target_mat, target_insider)
         cls = "nav-link active" if active else "nav-link"
         return f"<a class='{cls}' href='{href}'>{escape(label)}</a>"
 
@@ -408,6 +434,18 @@ def _static_filters(day, days, sectors, sector, materiality) -> str:
         "<div class=navrow><span class='navlabel rubric'>Materiality</span>"
         + "".join(items) + "</div>"
     )
+
+    if insider:
+        # Only shown when the filter is on. A row offering "insider activity /
+        # all filings" alongside Section and Materiality would imply it is one
+        # dimension among several; it is a different question about the same
+        # day, reached from the dateline.
+        rows.append(
+            "<div class=navrow><span class='navlabel rubric'>Showing</span>"
+            "<span class=nav-link style='border-bottom:1px solid currentColor'>"
+            "Filings with insider transactions</span>"
+            + link("Show all filings", day, "", "", False) + "</div>"
+        )
 
     return "<nav class=filters>" + "".join(rows) + "</nav>" + COLLAPSE_JS
 
